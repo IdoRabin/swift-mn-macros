@@ -1,8 +1,14 @@
-import MNMacros
+#if canImport(MNMacrosMacros)
+//    import MNMacrosMacros
+//
+//
+//    @SimplifiedEnum
+//    enum MyTestEnum {
+//        case first(Int)
+//        case second(String)
+//        case third
+//    }
 
-let a = 17
-let b = 25
-
-let (result, code) = #stringify(a + b)
-
-print("The value \(result) was produced by the code \"\(code)\"")
+    // Expected: "[first, second, third] "
+    // print("The values \(MyTestEnum.Simplified.allCases) are the simplified cases of: \(MyTestEnum)")
+#endif
