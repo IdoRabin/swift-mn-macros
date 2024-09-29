@@ -1,0 +1,28 @@
+{
+  "configurations" : [
+    {
+      "id" : "001F8D06-C3BE-417E-AC58-F83847344F9B",
+      "name" : "Test Scheme Action",
+      "options" : {
+
+      }
+    }
+  ],
+  "defaultOptions" : {
+    "targetForVariableExpansion" : {
+      "containerPath" : "container:",
+      "identifier" : "MNMacrosClient",
+      "name" : "MNMacrosClient"
+    }
+  },
+  "testTargets" : [
+    {
+      "target" : {
+        "containerPath" : "container:",
+        "identifier" : "MNMacrosTests",
+        "name" : "MNMacrosTests"
+      }
+    }
+  ],
+  "version" : 1
+}
