@@ -12,10 +12,3 @@ let testMacros: [String: Macro.Type] = [
     "simplifiedEnum": SimplifiedEnum.self,
 ]
 #endif
-
-//final class MNMacrosTests: XCTestCase {
-//    
-////    func testMNMacros() {
-////        
-////    }
-//}

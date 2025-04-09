@@ -39,6 +39,7 @@ public extension EnumCaseElementSyntax {
             var result: [String: [IdentifierTypeSyntax]] = [:]
             var foundToken = false
             for child in children {
+                // print("Checking case: [\(child.trimmedDescription)] kind: \(child.kind)")
                 switch child.kind {
                 case .enumCaseParameterClause:
                     // We have a parameter in the case decleration syntax:
@@ -50,8 +51,17 @@ public extension EnumCaseElementSyntax {
                         // We have left and right parantheses and at least one identifier value:
                         result[name.text.trimmingCharacters(in: .whitespacesAndNewlines) + child.description.trimmingCharacters(in: .newlines)] = associatedTypeIds
                     }
+                    
+                    if let associatedFuncIds = child.as(EnumCaseParameterClauseSyntax.self)?.associatedFuncs,
+                       !associatedFuncIds.isEmpty
+                    {
+                        // print("Assoc funcs: \(associatedFuncIds.description)")
+                        result[name.text.trimmingCharacters(in: .whitespacesAndNewlines) + child.description.trimmingCharacters(in: .newlines)] = associatedFuncIds
+                    }
                 case .token:
                     foundToken = true
+                    // Test for associated tuple, function
+                    
                 default:
                     break
                 }

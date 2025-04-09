@@ -1,5 +1,14 @@
 // MNMacros.swift
 
+public protocol SimplifiableEnum {
+    var simplified : any Hashable { get }
+}
+
+// @attached(member)
+//@attached(extension, conformances: SimplifiableEnum)
+@attached(member, names: arbitrary)
+public macro SimplifiedEnum() = #externalMacro(module: "MNMacrosMacros", type: "SimplifiedEnum") // ?? Macro suffix or not?
+
 /// SimplifiedEnum Macro:
 /// A macro that adds to an enum with at least on associated value a sub-enum named "Simplified" that is equatable,
 /// with helper methods to compare and convert between the Simplified and the fully-qualified enum.
@@ -46,6 +55,3 @@
 ///    }
 /// }
 ///
-///
-@attached(member)
-public macro SimplifiedEnum() = #externalMacro(module: "MNMacrosMacros", type: "SimplifiedEnumMacro") // ?? Macro suffix or not?

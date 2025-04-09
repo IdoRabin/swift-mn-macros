@@ -9,11 +9,20 @@ import SwiftCompilerPlugin
 import SwiftSyntax
 import SwiftSyntaxBuilder
 import SwiftSyntaxMacros
+import SwiftDiagnostics
+
+public protocol SimplifiableEnum {
+    var simplified : any Hashable { get }
+}
 
 // Will be used as: @attached(member)
+// , ExtensionMacro
 public struct SimplifiedEnum: MemberMacro {
+    
+    // MARK: static constants
     static let NO_ASSOCIATED_TYPES_STR = " -- has no associated type"
 
+    // MARK: private funcs
     /// Creates a 'simplified' var for the declared enum, giving the ability to use myEnumValue.simplified to get the 'simplified' value for each / any of the cases
     /// - Parameters:
     ///   - allEnumCasesDecl: all enum case declerations (can be extracted by using EnumDeclSyntax.allEnumCaseDeclerations(viewMode:) helper function)
@@ -21,24 +30,33 @@ public struct SimplifiedEnum: MemberMacro {
     /// - Returns: array of DeclSyntaxtes to add to an attached expansion providing members to an Enum.
     fileprivate static func createSimplifiedVar(allEnumCasesDecl: [EnumCaseElementSyntax], maxCaseTextLength: Int) throws -> [DeclSyntax] {
         // Create a string representing the var declaration with a getter
-        var cases = ""
+        
+        // tab hard codes the indentation.
+        // NOTE: this is important when compating to an XCTest with multiline strings
+        // See: assertMacroExpansion
+        let tab = "    "
+        var cases : [String] = []
         for acase in allEnumCasesDecl {
             let name = acase.name.text.trimmingCharacters(in: .whitespacesAndNewlines)
             let commentSpacesCount = max(maxCaseTextLength - name.count, 0)
             let commentSpaces = String(repeating: " ", count: commentSpacesCount)
 
             // NOTE: SwiftSyntax automatically adds a newline ("block") after the colon.
-            let newLine = (acase != allEnumCasesDecl.last) ? "\n" : ""
-            try cases += "case \(name): return Simplified.\(name)   \(commentSpaces) // \(acase.associatedType.namesDescription)ֿ\(newLine)"
+            let assocTypeDesc : String = try acase.associatedType.namesDescription
+            cases.append("\(tab)case .\(name):\nreturn Simplified.\(name)   \(commentSpaces) // \(assocTypeDesc)")
         }
 
-        let code = """
-        var simplified: Simplified {
-            switch self {
-            \(cases)
-            }
-        }
-        """
+        var lines = [
+            "var simplified: Simplified {",
+            "\(tab)switch self {"
+        ]
+        lines.append(contentsOf: cases)
+        lines.append(contentsOf: [
+            "\(tab)}",
+            "}"
+        ])
+        
+        let code = lines.joined(separator: "\n")
 
         // Parse the string into SwiftSyntax nodes
         return [DeclSyntax(stringLiteral: code)]
@@ -55,9 +73,10 @@ public struct SimplifiedEnum: MemberMacro {
                 // Create the Simplified enum declaration as a sub-Enum
                 EnumDeclSyntax(
                     name: "Simplified",
-                    inheritanceClause: // Add protocol conformane/s
+                    inheritanceClause: // Add protocol conformance/s
                     InheritanceClauseSyntax {
                         InheritedTypeListSyntax {
+                            InheritedTypeSyntax(type: TypeSyntax(stringLiteral: "Int"))
                             InheritedTypeSyntax(type: TypeSyntax(stringLiteral: "CaseIterable"))
                             InheritedTypeSyntax(type: TypeSyntax(stringLiteral: "Hashable"))
                         }
@@ -81,11 +100,108 @@ public struct SimplifiedEnum: MemberMacro {
         ]
     }
 
+    fileprivate static func addConformance( to enumDecl: inout EnumDeclSyntax, newProtocols: [String]) {
+        // Step 1: Get the existing inheritance clause (if any)
+        var existingProtocols: Set<String> = []
+        
+        if let inheritanceClause = enumDecl.inheritanceClause {
+            for element in inheritanceClause.inheritedTypes {
+                if let protocolName = element.type.as(IdentifierTypeSyntax.self)?.name.text {
+                    existingProtocols.insert(protocolName)
+                }
+            }
+        }
+        
+        // Step 2: Add new protocols to the set, avoiding duplicates
+        let newUniqueProtocols = newProtocols.filter { !existingProtocols.contains($0) }
+        
+        // If no new protocols to add, return the original enum declaration
+        if newUniqueProtocols.isEmpty {
+            return // No changes required
+        }
+        
+        // Step 3: Build the new inheritance clause
+        var inheritedTypeListSyntax = enumDecl.inheritanceClause?.inheritedTypes ?? InheritedTypeListSyntax([])
+
+        for newUniqueProtocol in newUniqueProtocols {
+            let newInheritedType = InheritedTypeSyntax(type: TypeSyntax(stringLiteral: newUniqueProtocol))
+            inheritedTypeListSyntax.append(newInheritedType)
+        }
+
+        let newInheritanceClause = InheritanceClauseSyntax(inheritedTypes: inheritedTypeListSyntax)
+        
+        // Step 4: Return the modified EnumDeclSyntax with the new inheritance clause
+        enumDecl.inheritanceClause = newInheritanceClause
+    }
+    
+    // MARK: MemberMacro
     public static func expansion(of _: AttributeSyntax,
                                  providingMembersOf declaration: some DeclGroupSyntax,
-                                 conformingTo _: [TypeSyntax],
-                                 in _: some MacroExpansionContext) throws -> [DeclSyntax]
+                                 conformingTo conformances: [TypeSyntax],
+                                 in context: some MacroExpansionContext) throws -> [DeclSyntax]
     {
+        
+        func diagnose(err:SimplifiedEnumErrors) throws {
+            context.diagnose(err.asDiagnostic(node: Syntax(declaration)))
+            // throw err
+        }
+        
+        // Check decleration is an Enum
+        guard let enumDecl = declaration.as(EnumDeclSyntax.self) else {
+            // The macro can only be applied to enums
+            try diagnose(err:SimplifiedEnumErrors.canOnlyImplementOnEnum)
+            return []
+        }
+        
+        // UNUSED: let enumName = enumDecl.name.text.trimmingCharacters(in: .whitespacesAndNewlines)
+        
+        // Check cases have at least one associated value enum case:
+        guard let allEnumCasesDecl = declaration.as(EnumDeclSyntax.self)?.allEnumCaseDeclerations(viewMode: .all) else {
+            try diagnose(err:SimplifiedEnumErrors.canOnlyImplementOnAssocValuedEnum)
+            return []
+        }
+        
+        if let internalEnum = enumDecl.memberBlock.members.first(where: { memberBlockItemSyntax in
+            return memberBlockItemSyntax.decl.kind == .enumDecl
+        })?.decl, let internalEnumDecl = internalEnum.as(EnumDeclSyntax.self) {
+            if internalEnumDecl.name.text.trimmingCharacters(in: .whitespacesAndNewlines) == "Simplified" {
+                // Already has an implemented sub-enum named 'Simplified'
+                try diagnose(err: SimplifiedEnumErrors.alreadyHasSimplifiedImplementedInEnum)
+                return []
+            }
+        }
+        
+        guard try allEnumCasesDecl.first(where: { enumCaseElementSyntax in
+            try enumCaseElementSyntax.hasAssociatedType
+        }) != nil else {
+            // Guard failed - no associated type in any of the cases:
+            try diagnose(err: SimplifiedEnumErrors.canOnlyImplementOnAssocValuedEnum)
+            return []
+        }
+        
+        // UNUSED: let enumDeclOwner = allEnumCasesDecl.first?.ownerEnum
+        // print("Expansion for Enum: \(enumName) Found case/s with associated type.")
+        
+        // For nice spacing of comments, we measure the length of the longest case name:
+        let maxCaseTextLength = allEnumCasesDecl.reduce(0) { partialResult, enumCaseElementSyntax in
+            max(partialResult, enumCaseElementSyntax.name.text.count)
+        }
+        
+        // Add all needed members:
+        var result: [DeclSyntax] = []
+        try result.append(contentsOf: createSimplifiedEnum(allEnumCasesDecl: allEnumCasesDecl, maxCaseTextLength: maxCaseTextLength))
+        try result.append(contentsOf: createSimplifiedVar(allEnumCasesDecl: allEnumCasesDecl, maxCaseTextLength: maxCaseTextLength))
+        return result
+        
+        // NOTE:
+        // If something fails during creation use
+        // throw SimplifiedEnumErrors.failedCreatingSimplifiedEnum(enumDecl.name.trimmedDescription)
+    }
+    
+    // MARK: ExtensionMacro
+    /*
+    public static func expansion(of node: SwiftSyntax.AttributeSyntax, attachedTo declaration: some SwiftSyntax.DeclGroupSyntax, providingExtensionsOf type: some SwiftSyntax.TypeSyntaxProtocol, conformingTo protocols: [SwiftSyntax.TypeSyntax], in context: some SwiftSyntaxMacros.MacroExpansionContext) throws -> [SwiftSyntax.ExtensionDeclSyntax] {
+
         // Check decleration is an Enum
         guard let enumDecl = declaration.as(EnumDeclSyntax.self) else {
             // The macro can only be applied to enums
@@ -95,10 +211,7 @@ public struct SimplifiedEnum: MemberMacro {
         let enumName = enumDecl.name.text.trimmingCharacters(in: .whitespacesAndNewlines)
 
         // Check cases have at least one associated value enum case:
-        guard let allEnumCasesDecl = declaration.as(EnumDeclSyntax.self)?.allEnumCaseDeclerations(viewMode: .all) else {
-            throw SimplifiedEnumErrors.canOnlyImplementOnAssocValuedEnum
-        }
-
+        let allEnumCasesDecl = enumDecl.allEnumCaseDeclerations(viewMode: .all)
         guard try allEnumCasesDecl.first(where: { enumCaseElementSyntax in
             try enumCaseElementSyntax.hasAssociatedType
         }) != nil else {
@@ -107,49 +220,14 @@ public struct SimplifiedEnum: MemberMacro {
             throw SimplifiedEnumErrors.canOnlyImplementOnAssocValuedEnum
         }
 
-        // let enumDeclOwner = allEnumCasesDecl.first?.ownerEnum
-        print("Expansion for Enum: \(enumName) Found case/s with associated type.")
-
         // For nice spacing of comments, we measure the length of the longest case name:
         let maxCaseTextLength = allEnumCasesDecl.reduce(0) { partialResult, enumCaseElementSyntax in
             max(partialResult, enumCaseElementSyntax.name.text.count)
         }
 
-        // Add all needed members:
-        var result: [DeclSyntax] = try createSimplifiedEnum(allEnumCasesDecl: allEnumCasesDecl, maxCaseTextLength: maxCaseTextLength)
-        try result.append(contentsOf: createSimplifiedVar(allEnumCasesDecl: allEnumCasesDecl, maxCaseTextLength: maxCaseTextLength))
-
-        return result
-        // NOTE:
-        // If something fails during creation use
-        // throw SimplifiedEnumErrors.failedCreatingSimplifiedEnum(enumDecl.name.trimmedDescription)
-
-        /*
-         // === declaration is expected to contain: ==
-         ─[0]: AttributeSyntax
-         │   ├─atSign: atSign
-         │   ╰─attributeName: IdentifierTypeSyntax
-         │     ╰─name: identifier("simplifyEnum")
-
-          // === memberBlock is expected to contain: ==
-         ├─members: MemberBlockItemListSyntax
-         │ ├─[0]: MemberBlockItemSyntax
-         │ │ ╰─decl: EnumCaseDeclSyntax
-         │ │   ├─attributes: AttributeListSyntax
-         │ │   ├─modifiers: DeclModifierListSyntax
-         │ │   ├─caseKeyword: keyword(SwiftSyntax.Keyword.case)
-         │ │   ╰─elements: EnumCaseElementListSyntax
-         │ │     ╰─[0]: EnumCaseElementSyntax
-         │ │       ├─name: identifier("one")
-         │ │       ╰─parameterClause: EnumCaseParameterClauseSyntax
-         │ │         ├─leftParen: leftParen
-         │ │         ├─parameters: EnumCaseParameterListSyntax // <--- here is the indication this is an associated type enum case
-         │ │         │ ╰─[0]: EnumCaseParameterSyntax
-         │ │         │   ├─modifiers: DeclModifierListSyntax
-         │ │         │   ╰─type: IdentifierTypeSyntax
-         │ │         │     ╰─name: identifier("String")
-         │ │         ╰─rightParen: rightParen
-         │ ├─...
-          */
-    }
+        let result = try ExtensionDeclSyntax(SyntaxNodeString(stringLiteral: "extension \(enumName) : SimplifiableEnum")) {
+            try createSimplifiedVar(allEnumCasesDecl: allEnumCasesDecl, maxCaseTextLength: maxCaseTextLength)
+        }
+        return [result]
+    }*/
 }

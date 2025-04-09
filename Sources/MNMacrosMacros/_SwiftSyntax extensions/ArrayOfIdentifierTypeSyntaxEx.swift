@@ -11,21 +11,23 @@ import SwiftSyntaxBuilder
 import SwiftSyntaxMacros
 
 public extension Sequence where Element == IdentifierTypeSyntax {
-    var names: [String] {
+    var nameStrings: [String] {
         return map { identifierTypeSyntax in
             identifierTypeSyntax.name.text
         }
     }
 
     var namesDescription: String {
-        let descs = names
+        let descs = self.nameStrings
+        var result = ""
         switch descs.count {
         case 0:
-            return SimplifiedEnum.NO_ASSOCIATED_TYPES_STR // "[NO ASSOCIATED TYPES]"
+            result = SimplifiedEnum.NO_ASSOCIATED_TYPES_STR // "[NO ASSOCIATED TYPES]"
         case 1:
-            return descs.first!.description
+            result = descs.first!
         default:
-            return descs.description
+            result = descs.joined(separator: "_")
         }
+        return result
     }
 }
